@@ -6,6 +6,10 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const codecommit = new aws.CodeCommit({ apiVersion: "2015-04-13" });
 
 export const handler = async (event, context) => {
+  // log the event object on CloudWatch
+  console.log("Event object: ");
+  console.log(event);
+
   // retrieve relevant data from event record
   const repositoryName = event.Records[0].eventSourceARN.split(":")[5];
   const commitId = event.Records[0].codecommit.references[0].commit;
@@ -31,9 +35,7 @@ export const handler = async (event, context) => {
   await codecommit
     .getCommit(commitParams, function (err, data) {
       if (err) {
-        let message =
-          "Error getting commit metadata from commit ID: " + commitId;
-        context.fail(message);
+        context.fail(err);
       } else {
         commitMessage = data.commit.message;
       }

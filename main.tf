@@ -15,7 +15,7 @@ provider "aws" {
   region = var.region
 }
 
-# Lambda function to handle SNS notifications 
+# Lambda function to handle CodeCommit notifications 
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "lambda/"
@@ -66,29 +66,15 @@ resource "aws_codecommit_approval_rule_template_association" "senior_devs_approv
   approval_rule_template_name = aws_codecommit_approval_rule_template.senior_devs_approval.name
 }
 
-# SNS topic to send notifications for repository triggers 
-resource "aws_sns_topic" "repo_notifications" {
-  name = "repo_notifications"
-}
-
-# CodeCommit trigger to subscribe to all repository events and send notifications to the SNS topic 
+# CodeCommit trigger to subscribe to all repository events and send notifications to the Lambda function
 resource "aws_codecommit_trigger" "repo_trigger" {
   repository_name = aws_codecommit_repository.simple_code_commit.repository_name
   trigger {
     name            = "all-events"
-    events          = ["all"]                              # All repository events 
-    destination_arn = aws_sns_topic.repo_notifications.arn # SNS topic ARN 
-    branches        = ["master"]                           # Branch filter 
+    events          = ["all"]                                      # All repository events 
+    destination_arn = aws_lambda_function.discord_notification.arn # Lambda function ARN 
+    branches        = ["master"]                                   # Branch filter 
   }
-}
-
-# SNS email subscriptions for the repository notifications 
-resource "aws_sns_topic_subscription" "repo_notifications_email" {
-
-  for_each  = toset(var.sns_emails)
-  topic_arn = aws_sns_topic.repo_notifications.arn
-  protocol  = "email"
-  endpoint  = each.value
 }
 
 # IAM role for the Lambda function 
@@ -101,6 +87,37 @@ resource "aws_iam_role" "lambda_exec" {
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_policy" "lambda_codecommit_access" {
+  name        = "lambda_codecommit_access"
+  path        = "/"
+  description = "IAM policy for lambda_exec role to access CodeCommit"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["codecommit:GetCommit"]
+        Resource = aws_codecommit_repository.simple_code_commit.arn
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_codecommit_access" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = aws_iam_policy.lambda_codecommit_access.arn
+}
+
+# give codecommit permission to invoke the lambda function
+resource "aws_lambda_permission" "allow_codecommit" {
+  statement_id  = "AllowExecutionFromCodeCommit"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.discord_notification.function_name
+  principal     = "codecommit.amazonaws.com"
+  source_arn    = aws_codecommit_repository.simple_code_commit.arn
 }
 
 # Lambda layer with Node.js packages
@@ -116,7 +133,7 @@ resource "aws_lambda_function" "discord_notification" {
   filename      = data.archive_file.lambda.output_path
   function_name = "discord_notification"
   role          = aws_iam_role.lambda_exec.arn
-  handler       = "lambda.handle_sns"
+  handler       = "lambda.handler"
 
   runtime = "nodejs18.x"
   timeout = 30
@@ -130,13 +147,6 @@ resource "aws_lambda_function" "discord_notification" {
   }
 }
 
-# Subscribe the Lambda function to the SNS topic 
-resource "aws_sns_topic_subscription" "lambda" {
-  topic_arn = aws_sns_topic.repo_notifications.arn
-  protocol  = "lambda"
-  endpoint  = aws_lambda_function.discord_notification.arn
-}
-
 # Event rule to trigger the Lambda function for any AWS CodeCommit events 
 resource "aws_cloudwatch_event_rule" "codecommit_events" {
   name = "codecommit_events"
@@ -146,8 +156,6 @@ resource "aws_cloudwatch_event_rule" "codecommit_events" {
       detail-type : ["CodeCommit Repository State Change"],
       detail : {
         event : ["referenceCreated", "referenceUpdated", "referenceDeleted"],
-        referenceType : ["branch"],
-        referenceName : ["master"],
         repositoryId : [aws_codecommit_repository.simple_code_commit.repository_id]
       }
     }
