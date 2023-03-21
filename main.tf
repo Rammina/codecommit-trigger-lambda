@@ -77,7 +77,7 @@ resource "aws_codecommit_trigger" "repo_trigger" {
   }
 }
 
-# IAM role for the Lambda function 
+# IAM role granting Lambda permissions to write CloudWatch Logs and access CodeCommit 
 resource "aws_iam_role" "lambda_exec" {
   name               = "lambda_exec"
   assume_role_policy = data.aws_iam_policy_document.assume_role.json
@@ -89,6 +89,7 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# IAM policy to give the Lambda role access to the CodeCommit repository 
 resource "aws_iam_policy" "lambda_codecommit_access" {
   name        = "lambda_codecommit_access"
   path        = "/"
@@ -106,6 +107,7 @@ resource "aws_iam_policy" "lambda_codecommit_access" {
   })
 }
 
+# Attach the IAM policy to the Lambda role 
 resource "aws_iam_role_policy_attachment" "lambda_codecommit_access" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = aws_iam_policy.lambda_codecommit_access.arn
@@ -145,26 +147,4 @@ resource "aws_lambda_function" "discord_notification" {
       DISCORD_WEBHOOK_URL = var.discord_webhook_url
     }
   }
-}
-
-# Event rule to trigger the Lambda function for any AWS CodeCommit events 
-resource "aws_cloudwatch_event_rule" "codecommit_events" {
-  name = "codecommit_events"
-  event_pattern = jsonencode(
-    {
-      source : ["aws.codecommit"],
-      detail-type : ["CodeCommit Repository State Change"],
-      detail : {
-        event : ["referenceCreated", "referenceUpdated", "referenceDeleted"],
-        repositoryId : [aws_codecommit_repository.simple_code_commit.repository_id]
-      }
-    }
-  )
-}
-
-# Associates the CloudWatch event rule with the Lambda function so it is invoked on CodeCommit events 
-resource "aws_cloudwatch_event_target" "codecommit_to_lambda" {
-  rule      = aws_cloudwatch_event_rule.codecommit_events.name
-  target_id = "codecommit_to_lambda"
-  arn       = aws_lambda_function.discord_notification.arn
 }
